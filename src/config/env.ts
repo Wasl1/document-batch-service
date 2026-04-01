@@ -14,5 +14,11 @@ function getEnv(name: string, defaultValue?: string): string {
 
 export const env = {
   port: Number(getEnv("PORT", "3001")),
-  nodeEnv: getEnv("NODE_ENV", "development")
+  nodeEnv: getEnv("NODE_ENV", "development"),
+
+  mongodbUri: getEnv("MONGODB_URI"),
+  mongodbDbName: getEnv("MONGODB_DB_NAME"),
+
+  redisHost: getEnv("REDIS_HOST"),
+  redisPort: Number(getEnv("REDIS_PORT", "6379"))
 };
