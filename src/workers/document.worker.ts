@@ -1,9 +1,22 @@
 import { Job, Worker } from "bullmq";
 import { defaultWorkerOptions } from "../config/bull.js";
 import { logger } from "../config/logger.js";
+import {
+  batchProcessingDurationSeconds,
+  documentsFailedTotal,
+  documentsGeneratedTotal,
+  documentProcessingDurationSeconds
+} from "../config/metrics.js";
 import { connectMongo } from "../config/mongo.js";
+import {
+  documentQueue,
+  updateDocumentQueueMetrics
+} from "../queues/document.queue.js";
 import type { DocumentGenerationJobData } from "../queues/document.queue.js";
-import { updateBatchProgress } from "../repositories/batch.repository.js";
+import {
+  getBatchById,
+  updateBatchProgress
+} from "../repositories/batch.repository.js";
 import {
   attachFileToDocument,
   getDocumentsByBatchId,
@@ -14,16 +27,34 @@ import {
 import { storePdfFileInGridFs } from "../services/gridfs.service.js";
 import { generateDocumentPdfBuffer } from "../services/pdf.service.js";
 import { withTimeout } from "../utils/promise.js";
+import { startWorkerMetricsServer } from "./worker-metrics-server.js";
 
 async function refreshBatchProgress(batchId: string): Promise<void> {
   const documents = await getDocumentsByBatchId(batchId);
   await updateBatchProgress(batchId, documents);
+
+  const batch = await getBatchById(batchId);
+
+  if (
+    batch &&
+    (batch.status === "completed" || batch.status === "failed") &&
+    batch.startedAt &&
+    batch.completedAt
+  ) {
+    const durationSeconds =
+      (batch.completedAt.getTime() - batch.startedAt.getTime()) / 1000;
+
+    if (durationSeconds >= 0) {
+      batchProcessingDurationSeconds.observe(durationSeconds);
+    }
+  }
 }
 
 async function processDocumentJob(
   job: Job<DocumentGenerationJobData>
 ): Promise<void> {
   const { batchId, documentId, userId } = job.data;
+  const documentStartTime = Date.now();
 
   logger.info(
     {
@@ -38,6 +69,7 @@ async function processDocumentJob(
 
   await updateDocumentStatus(documentId, "processing");
   await refreshBatchProgress(batchId);
+  await updateDocumentQueueMetrics();
 
   try {
     const fileId = await withTimeout(
@@ -62,6 +94,11 @@ async function processDocumentJob(
     await updateDocumentStatus(documentId, "completed");
     await refreshBatchProgress(batchId);
 
+    documentsGeneratedTotal.inc();
+    documentProcessingDurationSeconds.observe(
+      (Date.now() - documentStartTime) / 1000
+    );
+
     logger.info(
       {
         jobId: job.id,
@@ -84,6 +121,10 @@ async function processDocumentJob(
     if (isLastAttempt) {
       await updateDocumentStatus(documentId, "failed");
       await refreshBatchProgress(batchId);
+      documentsFailedTotal.inc();
+      documentProcessingDurationSeconds.observe(
+        (Date.now() - documentStartTime) / 1000
+      );
     }
 
     logger.error(
@@ -101,11 +142,15 @@ async function processDocumentJob(
     );
 
     throw error;
+  } finally {
+    await updateDocumentQueueMetrics();
   }
 }
 
 async function startWorker(): Promise<void> {
   await connectMongo();
+
+  startWorkerMetricsServer(3002);
 
   const worker = new Worker<DocumentGenerationJobData>(
     "document-generation",
@@ -113,11 +158,12 @@ async function startWorker(): Promise<void> {
     defaultWorkerOptions
   );
 
-  worker.on("completed", (job) => {
+  worker.on("completed", async (job) => {
     logger.info({ jobId: job.id }, "Worker job completed");
+    await updateDocumentQueueMetrics();
   });
 
-  worker.on("failed", (job, error) => {
+  worker.on("failed", async (job, error) => {
     logger.error(
       {
         err: error,
@@ -125,8 +171,10 @@ async function startWorker(): Promise<void> {
       },
       "Worker job failed"
     );
+    await updateDocumentQueueMetrics();
   });
 
+  await updateDocumentQueueMetrics();
   logger.info("Document worker started");
 }
 
