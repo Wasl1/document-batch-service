@@ -1,7 +1,7 @@
 import { type Collection, ObjectId } from "mongodb";
 import { getMongoDb } from "../config/mongo.js";
 import { COLLECTIONS } from "../config/collections.js";
-import type { DocumentEntity } from "../types/document.types.js";
+import type { DocumentEntity, DocumentStatus } from "../types/document.types.js";
 
 function getDocumentCollection(): Collection<DocumentEntity> {
   return getMongoDb().collection<DocumentEntity>(COLLECTIONS.documents);
@@ -29,5 +29,45 @@ export async function getDocumentsByBatchId(
     .find({
       batchId: new ObjectId(batchId)
     })
+    .sort({ createdAt: 1 })
     .toArray();
+}
+
+export async function updateDocumentStatus(
+  documentId: string,
+  status: DocumentStatus
+): Promise<void> {
+  const collection = getDocumentCollection();
+
+  const now = new Date();
+
+  const updatePayload: Partial<DocumentEntity> = {
+    status,
+    updatedAt: now
+  };
+
+  if (status === "processing") {
+    updatePayload.startedAt = now;
+  }
+
+  if (status === "completed" || status === "failed") {
+    updatePayload.completedAt = now;
+  }
+
+  await collection.updateOne(
+    { _id: new ObjectId(documentId) },
+    {
+      $set: updatePayload
+    }
+  );
+}
+
+export async function getDocumentById(
+  documentId: string
+): Promise<DocumentEntity | null> {
+  const collection = getDocumentCollection();
+
+  return collection.findOne({
+    _id: new ObjectId(documentId)
+  });
 }

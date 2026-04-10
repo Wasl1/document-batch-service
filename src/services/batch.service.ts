@@ -1,8 +1,11 @@
 import { ObjectId } from "mongodb";
 import { createBatch } from "../repositories/batch.repository.js";
-import { createManyDocuments } from "../repositories/document.repository.js";
+import {
+  createManyDocuments
+} from "../repositories/document.repository.js";
 import type { Batch } from "../types/batch.types.js";
 import type { DocumentEntity } from "../types/document.types.js";
+import { enqueueDocumentGenerationJob } from "../queues/document.queue.js";
 
 export interface CreateBatchInput {
   userIds: string[];
@@ -11,6 +14,10 @@ export interface CreateBatchInput {
 export async function createBatchWithDocuments(
   input: CreateBatchInput
 ): Promise<{ batch: Batch; documents: DocumentEntity[] }> {
+  if (!Array.isArray(input.userIds) || input.userIds.length === 0) {
+    throw new Error("userIds must be a non-empty array");
+  }
+
   const now = new Date();
 
   const batchToCreate: Batch = {
@@ -46,6 +53,18 @@ export async function createBatchWithDocuments(
   }));
 
   const createdDocuments = await createManyDocuments(documentsToCreate);
+
+  for (const document of createdDocuments) {
+    if (!document._id) {
+      throw new Error("Document ID was not generated");
+    }
+
+    await enqueueDocumentGenerationJob({
+      batchId: String(createdBatch._id),
+      documentId: String(document._id),
+      userId: document.userId
+    });
+  }
 
   return {
     batch: createdBatch,
