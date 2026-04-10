@@ -45,3 +45,36 @@ export async function enqueueDocumentGenerationJob(
 
   await updateDocumentQueueMetrics();
 }
+
+export async function getDocumentQueueHealth(): Promise<{
+  name: string;
+  counts: {
+    waiting: number;
+    active: number;
+    completed: number;
+    failed: number;
+    delayed: number;
+    paused: number;
+  };
+}> {
+  const counts = await documentQueue.getJobCounts(
+    "waiting",
+    "active",
+    "completed",
+    "failed",
+    "delayed",
+    "paused"
+  );
+
+  return {
+    name: documentQueue.name,
+    counts: {
+      waiting: counts.waiting ?? 0,
+      active: counts.active ?? 0,
+      completed: counts.completed ?? 0,
+      failed: counts.failed ?? 0,
+      delayed: counts.delayed ?? 0,
+      paused: counts.paused ?? 0
+    }
+  };
+}
