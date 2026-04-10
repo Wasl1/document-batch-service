@@ -3,6 +3,9 @@ import { getBatchById } from "../repositories/batch.repository.js";
 import { getDocumentsByBatchId } from "../repositories/document.repository.js";
 import { createBatchWithDocuments } from "../services/batch.service.js";
 import { isValidObjectId } from "../utils/object-id.js";
+import { ObjectId } from "mongodb";
+import { openPdfDownloadStream } from "../services/gridfs.service.js";
+import { getDocumentById } from "../repositories/document.repository.js";
 
 export async function createDocumentBatch(
   req: Request,
@@ -127,6 +130,67 @@ export async function getDocumentBatchById(
         }))
       }
     });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error instanceof Error ? error.message : "Internal server error"
+    });
+  }
+}
+
+export async function getGeneratedDocumentById(
+  req: Request,
+  res: Response
+): Promise<void> {
+  try {
+    const { documentId } = req.params;
+
+    if (typeof documentId !== "string" || !isValidObjectId(documentId)) {
+      res.status(400).json({
+        success: false,
+        message: "Invalid documentId"
+      });
+      return;
+    }
+
+    const document = await getDocumentById(documentId);
+
+    if (!document) {
+      res.status(404).json({
+        success: false,
+        message: "Document not found"
+      });
+      return;
+    }
+
+    if (!document.fileId) {
+      res.status(404).json({
+        success: false,
+        message: "PDF file not found for this document"
+      });
+      return;
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="document-${documentId}.pdf"`
+    );
+
+    const downloadStream = openPdfDownloadStream(
+      new ObjectId(String(document.fileId))
+    );
+
+    downloadStream.on("error", () => {
+      if (!res.headersSent) {
+        res.status(404).json({
+          success: false,
+          message: "Stored PDF file not found"
+        });
+      }
+    });
+
+    downloadStream.pipe(res);
   } catch (error) {
     res.status(500).json({
       success: false,

@@ -71,3 +71,20 @@ export async function getDocumentById(
     _id: new ObjectId(documentId)
   });
 }
+
+export async function attachFileToDocument(
+  documentId: string,
+  fileId: ObjectId
+): Promise<void> {
+  const collection = getDocumentCollection();
+
+  await collection.updateOne(
+    { _id: new ObjectId(documentId) },
+    {
+      $set: {
+        fileId,
+        updatedAt: new Date()
+      }
+    }
+  );
+}
