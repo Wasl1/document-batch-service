@@ -6,6 +6,7 @@ import { isValidObjectId } from "../utils/object-id.js";
 import { ObjectId } from "mongodb";
 import { openPdfDownloadStream } from "../services/gridfs.service.js";
 import { getDocumentById } from "../repositories/document.repository.js";
+import { logger } from "../config/logger.js";
 
 export async function createDocumentBatch(
   req: Request,
@@ -64,6 +65,7 @@ export async function createDocumentBatch(
         batchId: result.batch._id
       }
     });
+    
   } catch (error) {
     res.status(500).json({
       success: false,

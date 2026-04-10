@@ -1,5 +1,6 @@
 import { Job, Worker } from "bullmq";
 import { defaultWorkerOptions } from "../config/bull.js";
+import { logger } from "../config/logger.js";
 import { connectMongo } from "../config/mongo.js";
 import type { DocumentGenerationJobData } from "../queues/document.queue.js";
 import { updateBatchProgress } from "../repositories/batch.repository.js";
@@ -24,7 +25,16 @@ async function processDocumentJob(
 ): Promise<void> {
   const { batchId, documentId, userId } = job.data;
 
-  console.log(`Processing document ${documentId} for user ${userId}`);
+  logger.info(
+    {
+      jobId: job.id,
+      batchId,
+      documentId,
+      userId,
+      attemptsMade: job.attemptsMade
+    },
+    "Processing document job"
+  );
 
   await updateDocumentStatus(documentId, "processing");
   await refreshBatchProgress(batchId);
@@ -52,7 +62,16 @@ async function processDocumentJob(
     await updateDocumentStatus(documentId, "completed");
     await refreshBatchProgress(batchId);
 
-    console.log(`Document ${documentId} completed`);
+    logger.info(
+      {
+        jobId: job.id,
+        batchId,
+        documentId,
+        userId,
+        fileId: String(fileId)
+      },
+      "Document job completed"
+    );
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown processing error";
@@ -67,7 +86,20 @@ async function processDocumentJob(
       await refreshBatchProgress(batchId);
     }
 
-    console.error(`Document ${documentId} failed: ${errorMessage}`);
+    logger.error(
+      {
+        err: error,
+        jobId: job.id,
+        batchId,
+        documentId,
+        userId,
+        attemptsMade: job.attemptsMade,
+        maxAttempts: job.opts.attempts,
+        isLastAttempt
+      },
+      "Document job failed"
+    );
+
     throw error;
   }
 }
@@ -82,14 +114,20 @@ async function startWorker(): Promise<void> {
   );
 
   worker.on("completed", (job) => {
-    console.log(`Job ${job.id} completed`);
+    logger.info({ jobId: job.id }, "Worker job completed");
   });
 
   worker.on("failed", (job, error) => {
-    console.error(`Job ${job?.id} failed:`, error.message);
+    logger.error(
+      {
+        err: error,
+        jobId: job?.id
+      },
+      "Worker job failed"
+    );
   });
 
-  console.log("Document worker started");
+  logger.info("Document worker started");
 }
 
 void startWorker();
