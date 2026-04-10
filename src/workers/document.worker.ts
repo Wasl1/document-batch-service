@@ -7,9 +7,9 @@ import {
   documentsGeneratedTotal,
   documentProcessingDurationSeconds
 } from "../config/metrics.js";
-import { connectMongo } from "../config/mongo.js";
+import { closeMongo, connectMongo } from "../config/mongo.js";
+import { closeRedis } from "../config/redis.js";
 import {
-  documentQueue,
   updateDocumentQueueMetrics
 } from "../queues/document.queue.js";
 import type { DocumentGenerationJobData } from "../queues/document.queue.js";
@@ -28,6 +28,9 @@ import { storePdfFileInGridFs } from "../services/gridfs.service.js";
 import { generateDocumentPdfBuffer } from "../services/pdf.service.js";
 import { withTimeout } from "../utils/promise.js";
 import { startWorkerMetricsServer } from "./worker-metrics-server.js";
+
+let worker: Worker<DocumentGenerationJobData> | null = null;
+let isShuttingDown = false;
 
 async function refreshBatchProgress(batchId: string): Promise<void> {
   const documents = await getDocumentsByBatchId(batchId);
@@ -149,10 +152,9 @@ async function processDocumentJob(
 
 async function startWorker(): Promise<void> {
   await connectMongo();
-
   startWorkerMetricsServer(3002);
 
-  const worker = new Worker<DocumentGenerationJobData>(
+  worker = new Worker<DocumentGenerationJobData>(
     "document-generation",
     processDocumentJob,
     defaultWorkerOptions
@@ -177,5 +179,43 @@ async function startWorker(): Promise<void> {
   await updateDocumentQueueMetrics();
   logger.info("Document worker started");
 }
+
+async function shutdown(signal: string): Promise<void> {
+  if (isShuttingDown) {
+    logger.warn({ signal }, "Worker shutdown already in progress");
+    return;
+  }
+
+  isShuttingDown = true;
+
+  try {
+    logger.info({ signal }, "Worker graceful shutdown started");
+
+    if (worker) {
+      await worker.close();
+      logger.info("Worker closed");
+    }
+
+    await closeMongo();
+    logger.info("MongoDB connection closed");
+
+    await closeRedis();
+    logger.info("Redis connection closed");
+
+    logger.info("Worker graceful shutdown completed");
+    process.exit(0);
+  } catch (error) {
+    logger.error({ err: error }, "Error during worker graceful shutdown");
+    process.exit(1);
+  }
+}
+
+process.on("SIGINT", () => {
+  void shutdown("SIGINT");
+});
+
+process.on("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
 
 void startWorker();

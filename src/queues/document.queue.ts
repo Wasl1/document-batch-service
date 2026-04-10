@@ -78,3 +78,7 @@ export async function getDocumentQueueHealth(): Promise<{
     }
   };
 }
+
+export async function closeDocumentQueue(): Promise<void> {
+  await documentQueue.close();
+}
