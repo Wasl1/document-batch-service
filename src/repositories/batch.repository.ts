@@ -32,6 +32,11 @@ export async function updateBatchProgress(
   documents: DocumentEntity[]
 ): Promise<void> {
   const collection = getBatchCollection();
+  const batch = await getBatchById(batchId);
+
+  if (!batch) {
+    throw new Error("Batch not found");
+  }
 
   const processedCount = documents.filter(
     (document) => document.status === "completed" || document.status === "failed"
@@ -45,33 +50,44 @@ export async function updateBatchProgress(
     (document) => document.status === "failed"
   ).length;
 
+  const hasProcessing = documents.some(
+    (document) => document.status === "processing"
+  );
+
+  const totalDocuments = documents.length;
+
   let status: BatchStatus = "pending";
 
-  if (processedCount === 0 && documents.some((doc) => doc.status === "processing")) {
-    status = "processing";
-  } else if (processedCount === documents.length && failedCount === 0) {
+  if (processedCount === totalDocuments && failedCount === 0) {
     status = "completed";
-  } else if (processedCount === documents.length && failedCount > 0) {
+  } else if (processedCount === totalDocuments && failedCount > 0) {
     status = "failed";
-  } else if (documents.some((doc) => doc.status === "processing")) {
+  } else if (hasProcessing || processedCount > 0) {
     status = "processing";
   }
 
   const now = new Date();
 
+  const updatePayload: Partial<Batch> = {
+    status,
+    processedCount,
+    successCount,
+    failedCount,
+    updatedAt: now
+  };
+
+  if (status === "processing" && !batch.startedAt) {
+    updatePayload.startedAt = now;
+  }
+
+  if (status === "completed" || status === "failed") {
+    updatePayload.completedAt = now;
+  }
+
   await collection.updateOne(
     { _id: new ObjectId(batchId) },
     {
-      $set: {
-        status,
-        processedCount,
-        successCount,
-        failedCount,
-        updatedAt: now,
-        startedAt: status === "processing" ? now : null,
-        completedAt:
-          status === "completed" || status === "failed" ? now : null
-      }
+      $set: updatePayload
     }
   );
 }

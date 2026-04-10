@@ -1,15 +1,23 @@
 import { Job, Worker } from "bullmq";
 import { defaultWorkerOptions } from "../config/bull.js";
+import { connectMongo } from "../config/mongo.js";
+import type { DocumentGenerationJobData } from "../queues/document.queue.js";
+import { updateBatchProgress } from "../repositories/batch.repository.js";
 import {
   attachFileToDocument,
   getDocumentsByBatchId,
+  incrementDocumentRetryCount,
+  setDocumentError,
   updateDocumentStatus
 } from "../repositories/document.repository.js";
-import { updateBatchProgress } from "../repositories/batch.repository.js";
-import type { DocumentGenerationJobData } from "../queues/document.queue.js";
-import { connectMongo } from "../config/mongo.js";
-import { generateDocumentPdfBuffer } from "../services/pdf.service.js";
 import { storePdfFileInGridFs } from "../services/gridfs.service.js";
+import { generateDocumentPdfBuffer } from "../services/pdf.service.js";
+import { withTimeout } from "../utils/promise.js";
+
+async function refreshBatchProgress(batchId: string): Promise<void> {
+  const documents = await getDocumentsByBatchId(batchId);
+  await updateBatchProgress(batchId, documents);
+}
 
 async function processDocumentJob(
   job: Job<DocumentGenerationJobData>
@@ -18,44 +26,48 @@ async function processDocumentJob(
 
   console.log(`Processing document ${documentId} for user ${userId}`);
 
+  await updateDocumentStatus(documentId, "processing");
+  await refreshBatchProgress(batchId);
+
   try {
-    await updateDocumentStatus(documentId, "processing");
+    const fileId = await withTimeout(
+      (async () => {
+        const pdfBuffer = await generateDocumentPdfBuffer({
+          batchId,
+          documentId,
+          userId
+        });
 
-    {
-      const documents = await getDocumentsByBatchId(batchId);
-      await updateBatchProgress(batchId, documents);
-    }
-
-    const pdfBuffer = await generateDocumentPdfBuffer({
-      batchId,
-      documentId,
-      userId
-    });
-
-    const fileId = await storePdfFileInGridFs({
-      filename: `document-${documentId}.pdf`,
-      buffer: pdfBuffer,
-      contentType: "application/pdf"
-    });
+        return storePdfFileInGridFs({
+          filename: `document-${documentId}.pdf`,
+          buffer: pdfBuffer,
+          contentType: "application/pdf"
+        });
+      })(),
+      5000,
+      "PDF generation timed out after 5 seconds"
+    );
 
     await attachFileToDocument(documentId, fileId);
-
     await updateDocumentStatus(documentId, "completed");
-
-    {
-      const documents = await getDocumentsByBatchId(batchId);
-      await updateBatchProgress(batchId, documents);
-    }
+    await refreshBatchProgress(batchId);
 
     console.log(`Document ${documentId} completed`);
   } catch (error) {
-    await updateDocumentStatus(documentId, "failed");
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown processing error";
 
-    {
-      const documents = await getDocumentsByBatchId(batchId);
-      await updateBatchProgress(batchId, documents);
+    await incrementDocumentRetryCount(documentId);
+    await setDocumentError(documentId, errorMessage);
+
+    const isLastAttempt = job.attemptsMade + 1 >= (job.opts.attempts ?? 1);
+
+    if (isLastAttempt) {
+      await updateDocumentStatus(documentId, "failed");
+      await refreshBatchProgress(batchId);
     }
 
+    console.error(`Document ${documentId} failed: ${errorMessage}`);
     throw error;
   }
 }

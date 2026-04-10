@@ -33,35 +33,6 @@ export async function getDocumentsByBatchId(
     .toArray();
 }
 
-export async function updateDocumentStatus(
-  documentId: string,
-  status: DocumentStatus
-): Promise<void> {
-  const collection = getDocumentCollection();
-
-  const now = new Date();
-
-  const updatePayload: Partial<DocumentEntity> = {
-    status,
-    updatedAt: now
-  };
-
-  if (status === "processing") {
-    updatePayload.startedAt = now;
-  }
-
-  if (status === "completed" || status === "failed") {
-    updatePayload.completedAt = now;
-  }
-
-  await collection.updateOne(
-    { _id: new ObjectId(documentId) },
-    {
-      $set: updatePayload
-    }
-  );
-}
-
 export async function getDocumentById(
   documentId: string
 ): Promise<DocumentEntity | null> {
@@ -83,6 +54,79 @@ export async function attachFileToDocument(
     {
       $set: {
         fileId,
+        updatedAt: new Date()
+      }
+    }
+  );
+}
+
+export async function updateDocumentStatus(
+  documentId: string,
+  status: DocumentStatus
+): Promise<void> {
+  const collection = getDocumentCollection();
+  const currentDocument = await getDocumentById(documentId);
+
+  if (!currentDocument) {
+    throw new Error("Document not found");
+  }
+
+  const now = new Date();
+
+  const updatePayload: Partial<DocumentEntity> = {
+    status,
+    updatedAt: now
+  };
+
+  if (status === "processing" && !currentDocument.startedAt) {
+    updatePayload.startedAt = now;
+  }
+
+  if (status === "completed" || status === "failed") {
+    updatePayload.completedAt = now;
+  }
+
+  if (status === "completed") {
+    updatePayload.errorMessage = null;
+  }
+
+  await collection.updateOne(
+    { _id: new ObjectId(documentId) },
+    {
+      $set: updatePayload
+    }
+  );
+}
+
+export async function incrementDocumentRetryCount(
+  documentId: string
+): Promise<void> {
+  const collection = getDocumentCollection();
+
+  await collection.updateOne(
+    { _id: new ObjectId(documentId) },
+    {
+      $inc: {
+        retryCount: 1
+      },
+      $set: {
+        updatedAt: new Date()
+      }
+    }
+  );
+}
+
+export async function setDocumentError(
+  documentId: string,
+  errorMessage: string
+): Promise<void> {
+  const collection = getDocumentCollection();
+
+  await collection.updateOne(
+    { _id: new ObjectId(documentId) },
+    {
+      $set: {
+        errorMessage,
         updatedAt: new Date()
       }
     }
