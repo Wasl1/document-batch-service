@@ -1,4 +1,4 @@
-import express, { Express } from "express";
+import express, { Express, RequestHandler } from "express";
 import cors from "cors";
 import swaggerUi from "swagger-ui-express";
 import routes from "./routes/index.js";
@@ -9,7 +9,7 @@ import { httpLogger } from "./middlewares/logger.middleware.js";
 
 const app: Express = express();
 
-app.use(httpLogger);
+app.use(httpLogger as RequestHandler);
 app.use(cors());
 app.use(express.json());
 
